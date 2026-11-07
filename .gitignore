@@ -28,9 +28,15 @@ functions/node_modules/
 firebase-debug.log
 firebaserc.local
 
-# Local/duplicate sensitive exports (review before sharing)
+# Local/duplicate sensitive exports (keep local, do not commit)
 google-services*.json
-!flutter_mobile_app/android/app/google-services.json
+flutter_mobile_app/android/app/google-services.json
+flutter_mobile_app/lib/firebase_options.dart
+Admin Web Interface Design/src/store/firestoreSync.ts
+Admin Web Interface Design/src/store/sharedSync.ts
+Admin Web Interface Design/src/store/firebase.local.ts
+Admin Web Interface Design/.env
+Admin Web Interface Design/.env.*
 .env
 .env.*
 *.keystore
