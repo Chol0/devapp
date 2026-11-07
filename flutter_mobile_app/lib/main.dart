@@ -787,7 +787,6 @@ class _MyAppState extends State<MyApp> {
               passwordController: _passwordController,
               onToggleMode: () => setState(() => _isLogin = !_isLogin),
               onLogin: () => _authenticate(guestMode: false),
-              onGuestLogin: () => _authenticate(guestMode: true),
             );
           }
           return MobileHomePage(
@@ -1015,7 +1014,6 @@ class LoginScreen extends StatelessWidget {
     required this.passwordController,
     required this.onToggleMode,
     required this.onLogin,
-    required this.onGuestLogin,
     super.key,
   });
 
@@ -1027,7 +1025,6 @@ class LoginScreen extends StatelessWidget {
   final TextEditingController passwordController;
   final VoidCallback onToggleMode;
   final Future<void> Function() onLogin;
-  final Future<void> Function() onGuestLogin;
 
   @override
   Widget build(BuildContext context) {
@@ -1086,33 +1083,15 @@ class LoginScreen extends StatelessWidget {
                   const SizedBox(height: 8),
                   _buildTextField(passwordController, '••••••••••', Icons.lock_outlined, true),
                   if (error != null) ...[
-          const SizedBox(height: 16),
-          OutlineGradientButton(
-            onPressed: () async {
-              await FirebaseService.instance.signOut();
-            },
-            borderColor: Colors.redAccent,
-            gradientColors: const [Color(0xFF7F1D1D), Color(0xFF991B1B)],
-            child: const Text('Logout'),
-          ),
-          const SizedBox(height: 20),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(color: const Color(0xFF7F1D1D).withAlpha(30), borderRadius: BorderRadius.circular(14)),
-                      child: Text(error!, style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 13)),
+                    const SizedBox(height: 14),
+                    Text(
+                      error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFFFCA5A5), fontSize: 13, fontWeight: FontWeight.w600),
                     ),
                   ],
                   const SizedBox(height: 24),
                   GradientButton(onPressed: loading ? null : () { onLogin(); }, isDisabled: loading, isLoading: loading, child: Text(isLogin ? 'Sign In' : 'Create Account')),
-                  const SizedBox(height: 16),
-                  OutlineGradientButton(
-                    onPressed: loading ? null : () { onGuestLogin(); },
-                    isDisabled: loading,
-                    borderColor: kPrimaryColor,
-                    gradientColors: const [kSurfaceDark, kCardDark],
-                    child: const Text('Continue as Guest'),
-                  ),
                   const SizedBox(height: 20),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
