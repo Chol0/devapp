@@ -1,0 +1,172 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Safe role lookup: missing user doc or missing role denies admin privileges.
+    function userRole() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function isAdmin() {
+      return signedIn() && userRole() == 'admin';
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function noCardData(d) {
+      return !('cardNumber' in d) && !('cvv' in d) && !('cardCvv' in d)
+        && !('pan' in d) && !('card_number' in d) && !('securityCode' in d);
+    }
+
+    // Users: customers/guests can create/read/update their own profile; role cannot be self-elevated.
+    // Admins can read/manage users for User Management. Admin role changes must be explicit admin updates.
+    // Accept legacy role "user" on self-create for compatibility with older published rules/data; do not allow "admin".
+    match /users/{userId} {
+      allow create: if isOwner(userId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role in ['customer', 'guest', 'user'];
+      allow read: if isOwner(userId) || isAdmin();
+      allow update: if isAdmin()
+        || (isOwner(userId)
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.uid == resource.data.uid);
+      allow delete: if isAdmin();
+    }
+
+    // Products: authenticated users can read/list for the mobile storefront.
+    // Admins can create/edit/delete products. Authenticated checkout may only
+    // decrement stock/quantity (and touch updatedAt) to prevent oversell from
+    // arbitrary client edits; full validation still happens in the client transaction.
+    // Supports existing collection names: "product" (singular, current) and "products" (legacy).
+    match /product/{productId} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'quantity', 'updatedAt'])
+        && (
+          !('stock' in request.resource.data)
+          || (request.resource.data.stock is number && request.resource.data.stock >= 0 && request.resource.data.stock <= resource.data.get('stock', 999999))
+        )
+        && (
+          !('quantity' in request.resource.data)
+          || (request.resource.data.quantity is number && request.resource.data.quantity >= 0 && request.resource.data.quantity <= resource.data.get('quantity', 999999))
+        )
+      );
+    }
+    match /products/{productId} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'quantity', 'updatedAt'])
+        && (
+          !('stock' in request.resource.data)
+          || (request.resource.data.stock is number && request.resource.data.stock >= 0 && request.resource.data.stock <= resource.data.get('stock', 999999))
+        )
+        && (
+          !('quantity' in request.resource.data)
+          || (request.resource.data.quantity is number && request.resource.data.quantity >= 0 && request.resource.data.quantity <= resource.data.get('quantity', 999999))
+        )
+      );
+    }
+
+    // Categories: authenticated users can browse; only admins manage.
+    match /categories/{categoryId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Cart: owner-only. App uses doc id = "{userId}_{productId}" and userId field.
+    match /cart/{cartId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Favorites: owner-only.
+    match /favorites/{favoriteId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow update: if signedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId;
+    }
+
+    // Reviews: authenticated users can read; customers create their own reviews.
+    match /reviews/{reviewId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    // Notifications: owner can read/update their notifications; admins/system writers can create/manage.
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isAdmin() || (signedIn() && request.resource.data.userId == request.auth.uid);
+      allow update: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId);
+      allow delete: if isAdmin();
+    }
+
+    // Promotions: authenticated users can read active promos; only admins manage.
+    match /promotions/{promotionId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Payments: customer can create their own payment record (no card data); admins can read/manage.
+    // Payment status verification is admin-controlled via update.
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid && noCardData(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    // Orders: customers can create orders for themselves and read only their own orders.
+    // Admins can read all orders and update order/payment status.
+    // Orders are immutable after creation except admin-managed status/payment updates.
+    match /orders/{orderId} {
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && noCardData(request.resource.data);
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Existing collection used by mobile delivery profile flow.
+    match /customer_locations/{docId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    // AI Chatbot configuration: customers can read active/public config; only admins can manage.
+    match /chatbot_config/{docId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // AI Chatbot conversation history: owner-only access. No private customer info exposed to other users.
+    // Admins do not read customer chat content by default. Cloud Functions use Admin SDK for AI replies.
+    match /chatbot_messages/{messageId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
