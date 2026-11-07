@@ -367,16 +367,46 @@ class CustomerLocation {
 }
 
 String _friendlyAuthMessage(String rawBody) {
+  // Native FirebaseAuthException is surfaced as its message/code in toString(); also accept JSON REST error bodies.
+  final raw = rawBody.trim();
+  final normalized = raw.toLowerCase();
+  if (normalized.contains('wrong-password') ||
+      normalized.contains('invalid-credential') ||
+      normalized.contains('invalid_login_credentials') ||
+      normalized.contains('invalid login credentials')) {
+    return 'Incorrect email or password. Please try again.';
+  }
+  if (normalized.contains('user-not-found')) {
+    return 'No account found for that email.';
+  }
+  if (normalized.contains('invalid-email')) {
+    return 'Please enter a valid email address.';
+  }
+  if (normalized.contains('user-disabled')) {
+    return 'This account has been disabled. Please contact support.';
+  }
+  if (normalized.contains('email-already-in-use')) {
+    return 'An account with this email already exists.';
+  }
+  if (normalized.contains('weak-password')) {
+    return 'Password is too weak. Please use at least 6 characters.';
+  }
+  if (normalized.contains('network-request-failed') || normalized.contains('network error')) {
+    return 'Network error. Check your connection and try again.';
+  }
+  if (normalized.contains('too-many-requests')) {
+    return 'Too many attempts. Please wait a moment and try again.';
+  }
   try {
     final decoded = jsonDecode(rawBody);
     if (decoded is Map && decoded['error'] is Map) {
       final message = decoded['error']['message'];
-      if (message is String) {
-        return message.replaceAll('_', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
-      }
+      if (message is String) return _friendlyAuthMessage(message);
     }
   } catch (_) {}
-  return 'Firebase auth is unavailable right now.';
+  // Avoid leaking raw internal codes; keep simple for users.
+  if (raw.startsWith('[firebase_auth/')) return 'Sign-in failed. Please check your email and password.';
+  return raw.isEmpty ? 'Sign-in failed. Please try again.' : raw;
 }
 
 Future<UserCredential> signInWithPassword(String email, String password) async {
@@ -695,7 +725,13 @@ class _MyAppState extends State<MyApp> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyAuthMessage(e.toString()))));
+      final message = _friendlyAuthMessage(e.toString());
+      setState(() => _error = message);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ));
     } finally {
       if (mounted) {
         setState(() {
