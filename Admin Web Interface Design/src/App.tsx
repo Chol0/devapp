@@ -25,7 +25,7 @@ function hydrateFromFirebase(key: string, value: unknown) {
   window.dispatchEvent(new CustomEvent('nextech-sync', { detail: { key, value } }));
 }
 
-function LoginGate() {
+function LoginGate({ deniedMessage, onClearDenied }: { deniedMessage?: string; onClearDenied?: () => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -38,6 +38,7 @@ function LoginGate() {
       setBusy(true);
       setError('');
       setInfo('');
+      onClearDenied?.();
       if (!email.trim() || !password) {
         setError('Email and password are required.');
         return;
@@ -45,8 +46,12 @@ function LoginGate() {
       const user = await signInAdminWithEmail(email.trim(), password, mode);
       const role = await getCurrentUserRole(user.uid);
       if (role !== 'admin') {
-        setInfo('Signed in, but this account is not an admin (users/{uid}.role != "admin"). Firestore admin writes (products/orders/users management) will be blocked until you set role to "admin" in Firebase Console. Cloudinary image upload can still succeed, but saving the product to Firestore will fail with permissions.');
+        const deniedEmail = user.email || email.trim();
+        await signOutFirebaseAuth();
+        setError(`Access denied for ${deniedEmail}. This portal is for admin accounts only. Ask an administrator to set users/${user.uid}.role to "admin" in Firebase Console (Firestore rules block self-elevation).`);
+        return;
       }
+      // Auth state listener will grant access after role is confirmed.
     } catch (err) {
       setError(friendlyFirebaseError(err));
     } finally {
@@ -66,7 +71,7 @@ function LoginGate() {
         </div>
 
         <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800 }}>{mode === 'login' ? 'Admin Portal' : 'Create account'}</h1>
-        <p style={{ color: '#a6b6d6', margin: '12px 0 20px' }}>Sign in with a real Firebase account. For product CRUD in Firestore, set <code style={{ color: '#7dd3fc' }}>users/&#123;uid&#125;.role = "admin"</code> in Firebase Console (rules block non-admin writes).</p>
+        <p style={{ color: '#a6b6d6', margin: '12px 0 20px' }}>Admin access only. New accounts are created with the <b>customer</b> role and cannot access this portal until an administrator sets <code style={{ color: '#7dd3fc' }}>users/&#123;uid&#125;.role = "admin"</code> in Firebase Console. Client accounts created in the mobile app cannot access admin.</p>
 
         <label style={{ display: 'block', marginBottom: 12, fontSize: 13, color: '#dfe9ff' }}>Email</label>
         <input value={email} onChange={e => setEmail(e.target.value)} style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1px solid #1f2e4a', background: '#0d1729', color: '#edf2ff', marginBottom: 16 }} placeholder="admin@example.com" />
@@ -74,6 +79,7 @@ function LoginGate() {
         <label style={{ display: 'block', marginBottom: 12, fontSize: 13, color: '#dfe9ff' }}>Password</label>
         <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1px solid #1f2e4a', background: '#0d1729', color: '#edf2ff', marginBottom: 20 }} placeholder="••••••••" />
 
+        {deniedMessage && <div style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 16, fontSize: 13 }}>{deniedMessage}</div>}
         {info && <div style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, padding: '10px 12px', marginBottom: 16, fontSize: 13 }}>{info}</div>}
         {error && <div style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, padding: '10px 12px', marginBottom: 16 }}>{error}</div>}
 
@@ -81,7 +87,7 @@ function LoginGate() {
           <button disabled={busy} onClick={handleLogin} style={{ height: 48, border: 'none', borderRadius: 12, background: 'linear-gradient(135deg, #4f8ef7, #7c3aed)', color: '#fff', fontWeight: 700, cursor: 'pointer', opacity: busy ? 0.7 : 1 }}>
             {busy ? 'Please wait...' : mode === 'login' ? 'Sign in with Firebase' : 'Create Firebase account'}
           </button>
-          <div style={{ fontSize: 12, color: '#8b9fc8', lineHeight: 1.5 }}>Guest/demo tokens are disabled for Firestore writes because they cause <b>Missing or insufficient permissions</b> with secure rules.</div>
+          <div style={{ fontSize: 12, color: '#8b9fc8', lineHeight: 1.5 }}>Role-based access is enforced. Firestore rules must be published in Firebase Console for full protection.</div>
         </div>
       </div>
     </div>
@@ -92,21 +98,39 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
   const [authReady, setAuthReady] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deniedMessage, setDeniedMessage] = useState('');
 
   useEffect(() => {
+    let active = true;
     const unsub = subscribeAuth(async (user) => {
-      setIsAuthenticated(Boolean(user));
-      setAuthReady(true);
-      if (user) {
-        try { await ensureUserProfile(user); } catch { /* profile/rules may block; UI will surface on save */ }
+      if (!user) {
+        if (!active) return;
+        setIsAdmin(false);
+        setAuthReady(true);
+        return;
       }
+      try { await ensureUserProfile(user); } catch { /* profile sync is best-effort */ }
+      const role = await getCurrentUserRole(user.uid);
+      if (!active) return;
+      if (role === 'admin') {
+        setDeniedMessage('');
+        setIsAdmin(true);
+        setAuthReady(true);
+        return;
+      }
+      // Enforce role-based access: client/customer accounts cannot access the admin portal.
+      const email = user.email || 'this account';
+      setIsAdmin(false);
+      setDeniedMessage(`Access denied for ${email}. Client/customer accounts can only use the mobile app. Admin access requires users/${user.uid}.role = "admin" in Firestore (set manually in Firebase Console).`);
+      setAuthReady(true);
+      try { await signOutFirebaseAuth(); } catch { /* ignore sign-out errors */ }
     });
-    return unsub;
+    return () => { active = false; unsub(); };
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAdmin) return;
 
     const syncFirebaseState = async () => {
       // Best-effort legacy hydration for non-migrated pages (RTDB path is legacy)
@@ -119,7 +143,7 @@ export default function App() {
     };
 
     void syncFirebaseState();
-  }, [isAuthenticated]);
+  }, [isAdmin]);
 
   const navigate = (page: string) => {
     setCurrentPage(page as Page);
@@ -148,8 +172,8 @@ export default function App() {
     return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0b1120', color: '#c8d8f0' }}>Checking Firebase session…</div>;
   }
 
-  if (!isAuthenticated) {
-    return <LoginGate />;
+  if (!isAdmin) {
+    return <LoginGate deniedMessage={deniedMessage} onClearDenied={() => setDeniedMessage('')} />;
   }
 
   return (
