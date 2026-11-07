@@ -718,9 +718,27 @@ class _MyAppState extends State<MyApp> {
           throw Exception('Full name is required for registration.');
         }
         if (!_isLogin) {
-          await signUpWithPassword(email, password, fullName: fullName);
+          final cred = await signUpWithPassword(email, password, fullName: fullName);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Verification link sent to ${cred.user?.email ?? email}. Please check your email, then tap “I verified my email”.'),
+              backgroundColor: kPrimaryColor,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 5),
+            ));
+          }
         } else {
-          await signInWithPassword(email, password);
+          final cred = await signInWithPassword(email, password);
+          if (cred.user != null && !cred.user!.emailVerified && !cred.user!.isAnonymous && (cred.user!.email?.isNotEmpty ?? false)) {
+            try { await cred.user!.sendEmailVerification(); } catch (_) {}
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('Please verify your email first. We sent a verification link to your inbox.'),
+                backgroundColor: Colors.orange,
+                behavior: SnackBarBehavior.floating,
+              ));
+            }
+          }
         }
       }
     } catch (e) {
@@ -788,6 +806,10 @@ class _MyAppState extends State<MyApp> {
               onToggleMode: () => setState(() => _isLogin = !_isLogin),
               onLogin: () => _authenticate(guestMode: false),
             );
+          }
+          final needsVerification = !user.isAnonymous && (user.email?.isNotEmpty ?? false) && !user.emailVerified;
+          if (needsVerification) {
+            return VerifyEmailScreen(email: user.email ?? '');
           }
           return MobileHomePage(
             user: user,
@@ -1207,6 +1229,94 @@ class _ModeButtonState extends State<_ModeButton> with SingleTickerProviderState
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class VerifyEmailScreen extends StatefulWidget {
+  const VerifyEmailScreen({super.key, required this.email});
+  final String email;
+
+  @override
+  State<VerifyEmailScreen> createState() => _VerifyEmailScreenState();
+}
+
+class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
+  bool _busy = false;
+
+  Future<void> _reload() async {
+    setState(() => _busy = true);
+    try {
+      await FirebaseService.instance.auth.currentUser?.reload();
+      final user = FirebaseService.instance.auth.currentUser;
+      if (user != null && user.emailVerified) {
+        try {
+          await FirebaseService.instance.firestore.collection('users').doc(user.uid).set({
+            'emailVerified': true,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        } catch (_) {}
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Email verified. Welcome!'), backgroundColor: kPrimaryColor, behavior: SnackBarBehavior.floating));
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Email not verified yet. Open the link in your inbox, then try again.'), backgroundColor: Colors.orange, behavior: SnackBarBehavior.floating));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyAuthMessage(e.toString())), backgroundColor: Colors.redAccent, behavior: SnackBarBehavior.floating));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resend() async {
+    setState(() => _busy = true);
+    try {
+      await FirebaseService.instance.auth.currentUser?.sendEmailVerification();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Verification link sent to ${widget.email}.'), backgroundColor: kPrimaryColor, behavior: SnackBarBehavior.floating));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_friendlyAuthMessage(e.toString())), backgroundColor: Colors.redAccent, behavior: SnackBarBehavior.floating));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kSurfaceDark,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 440),
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(color: kCardDark, borderRadius: BorderRadius.circular(24), border: Border.all(color: const Color(0xFF334155))),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 64, height: 64, decoration: BoxDecoration(color: kPrimaryColor.withAlpha(30), borderRadius: BorderRadius.circular(18)), child: const Icon(Icons.mark_email_unread_outlined, color: kPrimaryColor, size: 32)),
+                const SizedBox(height: 16),
+                const Text('Verify your email', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 10),
+                Text('We sent a verification link to:', textAlign: TextAlign.center, style: const TextStyle(color: kMutedDark, fontSize: 14)),
+                const SizedBox(height: 4),
+                Text(widget.email, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 14),
+                const Text('Open the link in your email, then come back and tap the button below. You need to verify before using the app.', textAlign: TextAlign.center, style: TextStyle(color: kMutedDark, fontSize: 13, height: 1.45)),
+                const SizedBox(height: 22),
+                GradientButton(onPressed: _busy ? null : _reload, isLoading: _busy, child: const Text('I verified my email')),
+                const SizedBox(height: 12),
+                TextButton(onPressed: _busy ? null : _resend, child: const Text('Resend verification email')),
+                const SizedBox(height: 4),
+                TextButton(onPressed: _busy ? null : () async { await FirebaseService.instance.signOut(); }, child: const Text('Sign out')),
+              ]),
+            ),
+          ),
+        ),
       ),
     );
   }
