@@ -2324,6 +2324,23 @@ class _MobileHomePageState extends State<MobileHomePage> {
                 );
               }).toList(),
             ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () async {
+                await FirebaseService.instance.signOut();
+              },
+              icon: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444)),
+              label: const Text('Sign Out', style: TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.w800)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: const BorderSide(color: Color(0xFFEF4444)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
         ],
       ),
     );
